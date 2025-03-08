@@ -11,11 +11,8 @@ import {
   MessageSquare,
   Dumbbell,
   Trophy,
-  Target,
   Settings,
   Camera,
-  Grid,
-  LayoutList,
   Activity,
   Timer,
   Pencil,
@@ -31,7 +28,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/utils/supabase/client";
@@ -61,43 +58,6 @@ interface UserProfile {
   joined_date?: string;
   email: string | null;
   is_profile_private: boolean;
-}
-
-interface FollowUser {
-  id: string;
-  full_name: string | null;
-  username: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  is_profile_private: boolean;
-  status: "pending" | "accepted" | "rejected";
-}
-
-interface FollowerResponse {
-  follower: {
-    id: string;
-    profiles: {
-      full_name: string | null;
-      username: string | null;
-      avatar_url: string | null;
-      bio: string | null;
-      is_profile_private: boolean;
-    }[];
-  };
-}
-
-interface FollowingResponse {
-  following: {
-    id: string;
-    profiles: {
-      full_name: string | null;
-      username: string | null;
-      avatar_url: string | null;
-      bio: string | null;
-      is_profile_private: boolean;
-    }[];
-  };
-  status: "pending" | "accepted" | "rejected";
 }
 
 interface Post {
@@ -182,17 +142,11 @@ export default function ProfilePage() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [selectedTab, setSelectedTab] = useState("posts");
-  const [imageLoading, setImageLoading] = useState(true);
   const [isGeneratingBio, setIsGeneratingBio] = useState(false);
   const [followStatus, setFollowStatus] = useState<FollowStatus | null>(null);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
-  const [followers, setFollowers] = useState<FollowUser[]>([]);
-  const [following, setFollowing] = useState<FollowUser[]>([]);
-  const [followersLoading, setFollowersLoading] = useState(false);
-  const [followingLoading, setFollowingLoading] = useState(false);
 
   const updateAllProfilesWithDefaultAvatar = async () => {
     try {
@@ -806,103 +760,9 @@ export default function ProfilePage() {
     router.push(`/messages?userId=${userId}`);
   };
 
-  const fetchFollowers = async () => {
-    try {
-      setFollowersLoading(true);
-      const { data, error } = await supabase
-        .from("follows")
-        .select(
-          `
-          follower:follower_id(
-            id,
-            profiles!inner(
-              full_name,
-              username,
-              avatar_url,
-              bio,
-              is_profile_private
-            )
-          )
-        `
-        )
-        .eq("following_id", userId)
-        .eq("status", "accepted");
-
-      if (error) throw error;
-
-      if (data) {
-        const transformedFollowers: FollowUser[] = data.map((item) => ({
-          id: (item.follower as any).id,
-          full_name: (item.follower as any).profiles[0].full_name,
-          username: (item.follower as any).profiles[0].username,
-          avatar_url:
-            (item.follower as any).profiles[0].avatar_url || DEFAULT_AVATAR,
-          bio: (item.follower as any).profiles[0].bio,
-          is_profile_private: (item.follower as any).profiles[0]
-            .is_profile_private,
-          status: "accepted",
-        }));
-        setFollowers(transformedFollowers);
-      }
-    } catch (error) {
-      console.error("Error fetching followers:", error);
-      toast.error("Failed to load followers");
-    } finally {
-      setFollowersLoading(false);
-    }
-  };
-
-  const fetchFollowing = async () => {
-    try {
-      setFollowingLoading(true);
-      const { data, error } = await supabase
-        .from("follows")
-        .select(
-          `
-          following:following_id(
-            id,
-            profiles!inner(
-              full_name,
-              username,
-              avatar_url,
-              bio,
-              is_profile_private
-            )
-          ),
-          status
-        `
-        )
-        .eq("follower_id", userId);
-
-      if (error) throw error;
-
-      if (data) {
-        const transformedFollowing: FollowUser[] = data.map((item) => ({
-          id: (item.following as any).id,
-          full_name: (item.following as any).profiles[0].full_name,
-          username: (item.following as any).profiles[0].username,
-          avatar_url:
-            (item.following as any).profiles[0].avatar_url || DEFAULT_AVATAR,
-          bio: (item.following as any).profiles[0].bio,
-          is_profile_private: (item.following as any).profiles[0]
-            .is_profile_private,
-          status: item.status,
-        }));
-        setFollowing(transformedFollowing);
-      }
-    } catch (error) {
-      console.error("Error fetching following:", error);
-      toast.error("Failed to load following");
-    } finally {
-      setFollowingLoading(false);
-    }
-  };
-
   useEffect(() => {
-    if (selectedTab === "followers") {
-      fetchFollowers();
-    } else if (selectedTab === "following") {
-      fetchFollowing();
+    if (selectedTab === "posts" || selectedTab === "workouts") {
+      fetchProfileData();
     }
   }, [selectedTab, userId]);
 
@@ -1000,7 +860,7 @@ export default function ProfilePage() {
 
   return (
     <div className="flex-1 space-y-4 sm:space-y-6 p-4 sm:p-6 lg:p-8">
-      {/* Breadcrumb */}
+      {/* Breadcrumb - Hidden on mobile */}
       <Breadcrumb className="hidden sm:block">
         <BreadcrumbList>
           <BreadcrumbItem>
@@ -1022,15 +882,15 @@ export default function ProfilePage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      {/* Enhanced Profile Header */}
+      {/* Profile Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="relative overflow-hidden rounded-xl sm:rounded-2xl bg-gradient-to-br from-primary/5 via-primary/10 to-primary/5"
       >
         <div className="absolute inset-0 bg-grid-white/10" />
-        {/* Cover Image with blur overlay for private accounts */}
-        <div className="relative h-24 sm:h-32 md:h-48 lg:h-64 w-full overflow-hidden">
+        {/* Cover Image - Responsive height */}
+        <div className="relative h-32 sm:h-48 lg:h-64 w-full overflow-hidden">
           {profile?.cover_url ? (
             <div
               className={cn(
@@ -1085,10 +945,10 @@ export default function ProfilePage() {
           )}
         </div>
 
-        {/* Profile Content */}
-        <div className="relative px-3 sm:px-6 lg:px-8 pb-4 -mt-12 sm:-mt-16 md:-mt-20 lg:-mt-24">
-          <div className="flex flex-col sm:flex-row items-center sm:items-end gap-3 sm:gap-6">
-            {/* Avatar with blur for private accounts */}
+        {/* Profile Content - Responsive padding and layout */}
+        <div className="relative px-4 sm:px-6 lg:px-8 pb-4 -mt-16 sm:-mt-20 lg:-mt-24">
+          <div className="flex flex-col sm:flex-row items-center sm:items-end gap-4 sm:gap-6">
+            {/* Avatar - Responsive sizing */}
             <motion.div
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -1126,12 +986,9 @@ export default function ProfilePage() {
               </div>
             </motion.div>
 
+            {/* User Info - Responsive text and layout */}
             <div className="flex-1 text-center sm:text-left space-y-1 sm:space-y-2">
-              <motion.div
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4"
-              >
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
                 <div>
                   <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold tracking-tight">
                     {profile?.full_name || profile?.username || "User"}
@@ -1146,7 +1003,7 @@ export default function ProfilePage() {
                     </p>
                   )}
                 </div>
-                <div className="flex items-center justify-center sm:justify-end gap-2">
+                <div className="flex flex-col sm:flex-row items-center gap-2">
                   {currentUser?.id === userId ? (
                     <Link
                       href="/settings/profile"
@@ -1192,7 +1049,7 @@ export default function ProfilePage() {
                     </div>
                   )}
                 </div>
-              </motion.div>
+              </div>
 
               {/* Bio section */}
               {(profile?.bio || canViewPrivateContent()) && (
@@ -1249,11 +1106,11 @@ export default function ProfilePage() {
       {/* Only show content if user can view private content */}
       {canViewPrivateContent() && (
         <>
-          {/* Stats Grid */}
+          {/* Stats Grid - Responsive grid layout */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 sm:gap-4"
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-4"
           >
             {/* Workouts Card */}
             <Card className="bg-gradient-to-br from-card to-card/50 border-border/50">
@@ -1463,258 +1320,59 @@ export default function ProfilePage() {
             )}
           </motion.div>
 
-          {/* Content Tabs */}
+          {/* Tabs - 2x3 grid on mobile, full row on desktop */}
           <Tabs
             value={selectedTab}
             onValueChange={setSelectedTab}
             className="space-y-4"
           >
-            <div className="flex flex-col gap-4">
-              {/* View Mode Toggle - Always at top */}
-              {selectedTab === "posts" && (
-                <div className="flex items-center justify-end gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setViewMode("grid")}
-                    className={cn(
-                      "h-8 w-8 p-0",
-                      viewMode === "grid" && "bg-primary/10 text-primary"
-                    )}
-                  >
-                    <Grid className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setViewMode("list")}
-                    className={cn(
-                      "h-8 w-8 p-0",
-                      viewMode === "list" && "bg-primary/10 text-primary"
-                    )}
-                  >
-                    <LayoutList className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
+            <TabsList className="h-auto sm:h-10 w-full grid grid-cols-2 sm:grid-cols-6 gap-1 p-1 bg-muted">
+              <TabsTrigger
+                value="posts"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <MessageSquare className="h-4 w-4 hidden sm:block" />
+                <span>Posts</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="workouts"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <Dumbbell className="h-4 w-4 hidden sm:block" />
+                <span>Workouts</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="followers"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <Users className="h-4 w-4 hidden sm:block" />
+                <span>Followers</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="following"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <UserPlus className="h-4 w-4 hidden sm:block" />
+                <span>Following</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="achievements"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <Trophy className="h-4 w-4 hidden sm:block" />
+                <span>Achievements</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="progress"
+                className="flex items-center justify-center gap-2 h-12 sm:h-auto data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+              >
+                <Activity className="h-4 w-4 hidden sm:block" />
+                <span>Progress</span>
+              </TabsTrigger>
+            </TabsList>
 
-              {/* Single Row Tabs Navigation */}
-              <TabsList className="h-10 p-1 flex w-full bg-muted">
-                <TabsTrigger
-                  value="posts"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <MessageSquare className="h-4 w-4" />
-                  <span className="hidden sm:inline">Posts</span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="workouts"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <Dumbbell className="h-4 w-4" />
-                  <span className="hidden sm:inline">Workouts</span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="followers"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <Users className="h-4 w-4" />
-                  <span className="hidden sm:inline">Followers</span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="following"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <UserPlus className="h-4 w-4" />
-                  <span className="hidden sm:inline">Following</span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="achievements"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <Trophy className="h-4 w-4" />
-                  <span className="hidden sm:inline">Achievements</span>
-                </TabsTrigger>
-                <TabsTrigger
-                  value="goals"
-                  className="flex-1 flex items-center justify-center gap-2 px-2 sm:px-4 min-w-[70px] data-[state=active]:bg-primary/10"
-                >
-                  <Target className="h-4 w-4" />
-                  <span className="hidden sm:inline">Goals</span>
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <TabsContent value="followers">
-              {loading || followersLoading ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <div className="animate-spin">
-                      <Users className="h-12 w-12 text-muted-foreground mb-4" />
-                    </div>
-                    <h3 className="font-medium mb-2">Loading Followers...</h3>
-                  </div>
-                </Card>
-              ) : !canViewPrivateContent() ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Lock className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Private Account</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Follow this account to see their followers
-                    </p>
-                    <Button onClick={handleFollow} className="gap-2">
-                      <UserPlus className="h-4 w-4" />
-                      Follow to See Followers
-                    </Button>
-                  </div>
-                </Card>
-              ) : followers.length === 0 ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Users className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">No Followers Yet</h3>
-                    <p className="text-sm text-muted-foreground">
-                      This user doesn&apos;t have any followers yet.
-                    </p>
-                  </div>
-                </Card>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {followers.map((follower) => (
-                    <Card
-                      key={follower.id}
-                      className="overflow-hidden hover:shadow-lg transition-all duration-300"
-                    >
-                      <CardContent className="p-6">
-                        <div className="flex items-start gap-4">
-                          <Link href={`/social/profile/${follower.id}`}>
-                            <Avatar className="h-12 w-12 ring-2 ring-background">
-                              <AvatarImage
-                                src={follower.avatar_url || DEFAULT_AVATAR}
-                                alt={follower.full_name || "User"}
-                              />
-                              <AvatarFallback>
-                                {(follower.full_name?.[0] || "U").toUpperCase()}
-                              </AvatarFallback>
-                            </Avatar>
-                          </Link>
-                          <div className="flex-1 space-y-1">
-                            <Link
-                              href={`/social/profile/${follower.id}`}
-                              className="hover:underline"
-                            >
-                              <h4 className="font-medium">
-                                {follower.full_name || "User"}
-                              </h4>
-                            </Link>
-                            {follower.username && (
-                              <p className="text-sm text-muted-foreground">
-                                @{follower.username}
-                              </p>
-                            )}
-                            {follower.bio && (
-                              <p className="text-sm text-muted-foreground line-clamp-2">
-                                {follower.bio}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="following">
-              {loading || followingLoading ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <div className="animate-spin">
-                      <UserPlus className="h-12 w-12 text-muted-foreground mb-4" />
-                    </div>
-                    <h3 className="font-medium mb-2">Loading Following...</h3>
-                  </div>
-                </Card>
-              ) : !canViewPrivateContent() ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Lock className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Private Account</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Follow this account to see who they follow
-                    </p>
-                    <Button onClick={handleFollow} className="gap-2">
-                      <UserPlus className="h-4 w-4" />
-                      Follow to See Following
-                    </Button>
-                  </div>
-                </Card>
-              ) : following.length === 0 ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <UserPlus className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Not Following Anyone</h3>
-                    <p className="text-sm text-muted-foreground">
-                      This user isn&apos;t following anyone yet.
-                    </p>
-                  </div>
-                </Card>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {following.map((follow) => (
-                    <Card
-                      key={follow.id}
-                      className="overflow-hidden hover:shadow-lg transition-all duration-300"
-                    >
-                      <CardContent className="p-6">
-                        <div className="flex items-start gap-4">
-                          <Link href={`/social/profile/${follow.id}`}>
-                            <Avatar className="h-12 w-12 ring-2 ring-background">
-                              <AvatarImage
-                                src={follow.avatar_url || DEFAULT_AVATAR}
-                                alt={follow.full_name || "User"}
-                              />
-                              <AvatarFallback>
-                                {(follow.full_name?.[0] || "U").toUpperCase()}
-                              </AvatarFallback>
-                            </Avatar>
-                          </Link>
-                          <div className="flex-1 space-y-1">
-                            <Link
-                              href={`/social/profile/${follow.id}`}
-                              className="hover:underline"
-                            >
-                              <h4 className="font-medium">
-                                {follow.full_name || "User"}
-                              </h4>
-                            </Link>
-                            {follow.username && (
-                              <p className="text-sm text-muted-foreground">
-                                @{follow.username}
-                              </p>
-                            )}
-                            {follow.bio && (
-                              <p className="text-sm text-muted-foreground line-clamp-2">
-                                {follow.bio}
-                              </p>
-                            )}
-                            {follow.status === "pending" && (
-                              <Badge variant="secondary" className="mt-2">
-                                Request Pending
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="posts">
+            {/* Tab Content - Responsive padding */}
+            <TabsContent value="posts" className="space-y-4">
               {loading ? (
                 <Card className="p-8">
                   <div className="flex flex-col items-center justify-center text-center">
@@ -1748,91 +1406,6 @@ export default function ProfilePage() {
                     </p>
                   </div>
                 </Card>
-              ) : viewMode === "grid" ? (
-                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
-                  {posts.map((post) => (
-                    <Card
-                      key={post.id}
-                      className="overflow-hidden group cursor-pointer hover:shadow-xl transition-all duration-300 bg-gradient-to-br from-card to-card/50 border-border/50"
-                    >
-                      {post.image_url ? (
-                        <div className="relative aspect-square">
-                          <Image
-                            src={post.image_url}
-                            alt=""
-                            fill
-                            className={cn(
-                              "object-cover transition-opacity duration-300",
-                              imageLoading ? "opacity-0" : "opacity-100"
-                            )}
-                            onLoadingComplete={() => setImageLoading(false)}
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                          <div className="absolute bottom-0 left-0 right-0 p-4 transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                            <div className="flex items-center gap-4 text-white">
-                              <div className="flex items-center gap-1">
-                                <MessageSquare className="h-5 w-5" />
-                                <span className="text-sm font-medium">
-                                  {post.comments.length}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <Activity className="h-5 w-5" />
-                                <span className="text-sm font-medium">
-                                  {post.reactions.length}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <CardContent className="p-4">
-                          <div className="flex items-center gap-3 mb-3">
-                            <Avatar className="h-8 w-8">
-                              <AvatarImage
-                                src={
-                                  post.user.profiles.avatar_url ||
-                                  DEFAULT_AVATAR
-                                }
-                                alt={post.user.profiles.full_name}
-                                className="object-cover"
-                              />
-                              <AvatarFallback>
-                                {(
-                                  post.user.profiles.full_name[0] || "U"
-                                ).toUpperCase()}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-medium text-sm">
-                                {post.user.profiles.full_name}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {new Date(post.created_at).toLocaleDateString()}
-                              </p>
-                            </div>
-                          </div>
-                          <p className="line-clamp-4 text-sm leading-relaxed">
-                            {post.content}
-                          </p>
-                          {post.tags && post.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-3">
-                              {post.tags.slice(0, 3).map((tag) => (
-                                <Badge
-                                  key={tag}
-                                  variant="secondary"
-                                  className="text-xs bg-primary/10 hover:bg-primary/20"
-                                >
-                                  #{tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                        </CardContent>
-                      )}
-                    </Card>
-                  ))}
-                </div>
               ) : (
                 <div className="space-y-4">
                   {posts.map((post) => (
@@ -1929,60 +1502,52 @@ export default function ProfilePage() {
               )}
             </TabsContent>
 
-            <TabsContent value="achievements">
-              {!canViewPrivateContent() ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Lock className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Private Account</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Follow this account to see their achievements
-                    </p>
-                    <Button onClick={handleFollow} className="gap-2">
-                      <UserPlus className="h-4 w-4" />
-                      Follow to See Achievements
-                    </Button>
-                  </div>
-                </Card>
-              ) : (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Trophy className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Achievements</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Coming soon: Track fitness milestones and achievements.
-                    </p>
-                  </div>
-                </Card>
-              )}
+            <TabsContent value="followers">
+              <Card className="p-8">
+                <div className="flex flex-col items-center justify-center text-center">
+                  <Users className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="font-medium mb-2">Followers</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Coming soon: View and manage followers.
+                  </p>
+                </div>
+              </Card>
             </TabsContent>
 
-            <TabsContent value="goals">
-              {!canViewPrivateContent() ? (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Lock className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Private Account</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Follow this account to see their fitness goals
-                    </p>
-                    <Button onClick={handleFollow} className="gap-2">
-                      <UserPlus className="h-4 w-4" />
-                      Follow to See Goals
-                    </Button>
-                  </div>
-                </Card>
-              ) : (
-                <Card className="p-8">
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <Target className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="font-medium mb-2">Fitness Goals</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Coming soon: Set and track your fitness goals.
-                    </p>
-                  </div>
-                </Card>
-              )}
+            <TabsContent value="following">
+              <Card className="p-8">
+                <div className="flex flex-col items-center justify-center text-center">
+                  <UserPlus className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="font-medium mb-2">Following</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Coming soon: View who you follow.
+                  </p>
+                </div>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="achievements">
+              <Card className="p-8">
+                <div className="flex flex-col items-center justify-center text-center">
+                  <Trophy className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="font-medium mb-2">Achievements</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Coming soon: Track fitness milestones and achievements.
+                  </p>
+                </div>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="progress">
+              <Card className="p-8">
+                <div className="flex flex-col items-center justify-center text-center">
+                  <Activity className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="font-medium mb-2">Progress</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Coming soon: Track and share your fitness progress.
+                  </p>
+                </div>
+              </Card>
             </TabsContent>
           </Tabs>
         </>

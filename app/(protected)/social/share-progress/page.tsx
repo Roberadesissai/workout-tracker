@@ -44,6 +44,8 @@ import {
   User,
   Sparkles,
   Loader2,
+  CreditCard,
+  DollarSign,
 } from "lucide-react";
 import {
   Dialog,
@@ -65,14 +67,7 @@ import {
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
-
-interface Achievement {
-  id: string;
-  type: "consistency" | "progress";
-  level: "bronze" | "silver" | "gold";
-  name: string;
-  date: string;
-}
+import { loadStripe } from "@stripe/stripe-js";
 
 interface User {
   id: string;
@@ -81,9 +76,8 @@ interface User {
   avatar_url: string | null;
   email: string | null;
   display_option: "username" | "full_name" | "email";
-  display_name: string;
-  streak: number;
-  achievements: Achievement[];
+  display_name?: string;
+  streak?: number;
 }
 
 interface ProgressVisualData {
@@ -100,56 +94,7 @@ interface Comment {
   content: string;
   created_at: string;
   edited?: boolean;
-  user: {
-    id: string;
-    full_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    email: string | null;
-    display_option: "username" | "full_name" | "email";
-    display_name: string;
-  };
-}
-
-interface RawProgressPost {
-  id: string;
-  title: string;
-  content: string;
-  progress_type: "workout" | "nutrition" | "measurement" | "achievement";
-  media_urls: string[];
-  tags: string[];
-  is_premium: boolean;
-  subscription_required: boolean;
-  created_at: string;
-  pinned: boolean;
-  user_id: string;
-  user: {
-    id: string;
-    full_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-    email: string | null;
-    display_option: "username" | "full_name" | "email";
-  };
-  reactions: Array<{
-    id: string;
-    user_id: string;
-    reaction_type: keyof typeof REACTIONS;
-    created_at: string;
-  }>;
-  comments: Array<{
-    id: string;
-    content: string;
-    created_at: string;
-    user: {
-      id: string;
-      full_name: string | null;
-      username: string | null;
-      avatar_url: string | null;
-      email: string | null;
-      display_option: "username" | "full_name" | "email";
-    };
-  }>;
+  user: User;
 }
 
 interface ProgressPost {
@@ -164,7 +109,7 @@ interface ProgressPost {
   created_at: string;
   pinned: boolean;
   expanded?: boolean;
-  user: User;
+  user: User & { display_name: string };
   progress_details: {
     id: string;
     detail_type: string;
@@ -182,6 +127,8 @@ interface ProgressPost {
   };
   user_reaction?: keyof typeof REACTIONS;
   showComments: boolean;
+  premium_type: "subscription" | "one_time" | "free";
+  one_time_price: number | null;
 }
 
 const REACTIONS = {
@@ -242,6 +189,61 @@ const getDisplayName = (
   return user.email || "Anonymous User";
 };
 
+interface DatabaseUser {
+  id: string;
+  full_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  email: string | null;
+  display_option: "username" | "full_name" | "email";
+}
+
+interface DatabaseComment {
+  id: string;
+  content: string;
+  created_at: string;
+  user: User;
+}
+
+interface DatabasePost {
+  id: string;
+  title: string;
+  content: string;
+  progress_type: "workout" | "nutrition" | "measurement" | "achievement";
+  media_urls: string[];
+  tags: string[];
+  is_premium: boolean;
+  subscription_required: boolean;
+  created_at: string;
+  pinned: boolean;
+  user_id: string;
+  premium_type: "subscription" | "one_time" | "free";
+  one_time_price: number | null;
+  progress_reactions?: {
+    id: string;
+    reaction_type: keyof typeof REACTIONS;
+    user_id: string;
+  }[];
+  progress_comments?: {
+    id: string;
+    content: string;
+    created_at: string;
+    user: DatabaseUser;
+  }[];
+  user: DatabaseUser;
+  progress_details?: {
+    id: string;
+    detail_type: string;
+    value: string | number;
+    unit: string;
+  }[];
+}
+
+// Initialize Stripe
+const stripePromise = loadStripe(
+  process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ""
+);
+
 export default function ShareProgressPage() {
   const [posts, setPosts] = useState<ProgressPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -265,6 +267,8 @@ export default function ShareProgressPage() {
     tags: string[];
     is_premium: boolean;
     subscription_required: boolean;
+    premium_type: "subscription" | "one_time" | "free";
+    price?: number;
     progress_details: {
       id: string;
       detail_type: string;
@@ -279,6 +283,7 @@ export default function ShareProgressPage() {
     tags: [],
     is_premium: false,
     subscription_required: false,
+    premium_type: "free",
     progress_details: [],
   });
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
@@ -300,6 +305,27 @@ export default function ShareProgressPage() {
   const [subscriptionStatus, setSubscriptionStatus] = useState<{
     [key: string]: string;
   }>({});
+  // Add this state to track purchased posts
+  const [purchasedPosts, setPurchasedPosts] = useState<string[]>([]);
+
+  // Add this function to check payments
+  const fetchUserPayments = async () => {
+    if (!user) return;
+
+    try {
+      const { data: payments, error } = await supabase
+        .from("premium_payments")
+        .select("post_id")
+        .eq("user_id", user.id)
+        .eq("status", "succeeded");
+
+      if (error) throw error;
+
+      setPurchasedPosts(payments.map((payment) => payment.post_id));
+    } catch (error) {
+      console.error("Error fetching user payments:", error);
+    }
+  };
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -318,6 +344,7 @@ export default function ShareProgressPage() {
 
     fetchUser();
     fetchPosts();
+    fetchUserPayments(); // Add this line
   }, []);
 
   useEffect(() => {
@@ -349,60 +376,120 @@ export default function ShareProgressPage() {
     fetchSubscriptionStatuses();
   }, [user]);
 
+  const formatUserData = (userData: DatabaseUser): User => ({
+    id: userData.id,
+    full_name: userData.full_name || null,
+    username: userData.username || null,
+    avatar_url: userData.avatar_url || null,
+    email: userData.email || null,
+    display_option: userData.display_option || "username",
+  });
+
+  const formatComment = (comment: ProgressComment): Comment => ({
+    id: comment.id,
+    content: comment.content,
+    created_at: comment.created_at,
+    user: {
+      ...comment.user,
+      display_name: getDisplayName(comment.user),
+    },
+  });
+
   const fetchPosts = async () => {
-    setLoading(true);
     try {
-      const { data: postsData, error } = await supabase
+      setLoading(true);
+      const { data: posts, error } = await supabase
         .from("progress_posts")
         .select(
           `
           *,
-          user:profiles(*),
-          reactions:progress_reactions(*),
-          comments:progress_comments(
+          user:user_id (
+            id,
+            full_name,
+            username,
+            avatar_url,
+            email,
+            display_option
+          ),
+          progress_comments (
             id,
             content,
             created_at,
-            user:profiles(*)
+            user:user_id (
+              id,
+              full_name,
+              username,
+              avatar_url,
+              email,
+              display_option
+            )
+          ),
+          progress_reactions (
+            id,
+            reaction_type,
+            user_id
+          ),
+          progress_details (
+            id,
+            detail_type,
+            value,
+            unit
           )
         `
         )
-        .order("pinned", { ascending: false })
-        .order("created_at", { ascending: false })
-        .limit(10);
+        .order("created_at", { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Supabase error:", error);
+        throw error;
+      }
 
-      if (postsData) {
-        const formattedPosts: ProgressPost[] = (
-          postsData as RawProgressPost[]
-        ).map((post) => {
-          // Initialize reactions with all types set to 0
-          const initialReactions: { [K in keyof typeof REACTIONS]: number } = {
-            like: 0,
-            muscle: 0,
-            goal: 0,
-            medal: 0,
-            champion: 0,
-          };
+      if (!posts) {
+        setPosts([]);
+        return;
+      }
 
-          // Count reactions by type
-          const reactionCounts = (post.reactions || []).reduce(
-            (acc, reaction) => ({
-              ...acc,
-              [reaction.reaction_type]: (acc[reaction.reaction_type] || 0) + 1,
-            }),
-            initialReactions
+      const formattedPosts = (posts as DatabasePost[]).map(
+        (post): ProgressPost => {
+          // Group reactions by type and count them
+          const reactions = (post.progress_reactions || []).reduce(
+            (acc, reaction) => {
+              const type = reaction.reaction_type as keyof typeof REACTIONS;
+              acc[type] = (acc[type] || 0) + 1;
+              return acc;
+            },
+            {} as Record<keyof typeof REACTIONS, number>
           );
 
-          // Find user's reaction if any
-          const userReaction = post.reactions?.find(
-            (r: { user_id: string }) => r.user_id === user?.id
+          // Initialize with all reaction types set to 0
+          const defaultReactions = Object.keys(REACTIONS).reduce((acc, key) => {
+            acc[key as keyof typeof REACTIONS] = 0;
+            return acc;
+          }, {} as Record<keyof typeof REACTIONS, number>);
+
+          // Merge default reactions with actual reactions
+          const mergedReactions = { ...defaultReactions, ...reactions };
+
+          // Find user's reaction if they've reacted
+          const userReaction = post.progress_reactions?.find(
+            (r) => r.user_id === user?.id
           )?.reaction_type;
 
-          // Format comments
-          const formattedComments: Comment[] = (post.comments || []).map(
-            (comment) => ({
+          const formattedUser: User & { display_name: string } = {
+            id: post.user.id,
+            full_name: post.user.full_name,
+            username: post.user.username,
+            avatar_url: post.user.avatar_url,
+            email: post.user.email,
+            display_option: post.user.display_option,
+            display_name: getDisplayName(post.user),
+          };
+
+          return {
+            ...post,
+            user: formattedUser,
+            progress_details: post.progress_details || [],
+            comments: (post.progress_comments || []).map((comment) => ({
               id: comment.id,
               content: comment.content,
               created_at: comment.created_at,
@@ -415,35 +502,19 @@ export default function ShareProgressPage() {
                 display_option: comment.user.display_option,
                 display_name: getDisplayName(comment.user),
               },
-            })
-          );
-
-          return {
-            ...post,
-            expanded: false,
-            showComments: false,
-            user: {
-              id: post.user.id,
-              full_name: post.user.full_name,
-              username: post.user.username,
-              avatar_url: post.user.avatar_url,
-              email: post.user.email,
-              display_option: post.user.display_option,
-              display_name: getDisplayName(post.user),
-              streak: 0,
-              achievements: [],
-            },
-            reactions: reactionCounts,
+            })),
+            reactions: mergedReactions,
             user_reaction: userReaction,
-            comments: formattedComments,
-            progress_details: [],
+            showComments: false,
+            expanded: false,
           };
-        });
-        setPosts(formattedPosts);
-      }
+        }
+      );
+
+      setPosts(formattedPosts);
     } catch (error) {
       console.error("Error fetching posts:", error);
-      toast.error("Failed to fetch posts");
+      toast.error("Failed to load posts. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -466,6 +537,9 @@ export default function ShareProgressPage() {
             tags: newPost.tags,
             is_premium: newPost.is_premium,
             subscription_required: newPost.subscription_required,
+            premium_type: newPost.premium_type,
+            one_time_price:
+              newPost.premium_type === "one_time" ? newPost.price : null,
           },
         ])
         .select()
@@ -513,6 +587,9 @@ export default function ShareProgressPage() {
           id: Math.random().toString(),
         })),
         showComments: false,
+        premium_type: newPost.premium_type,
+        one_time_price:
+          newPost.premium_type === "one_time" ? newPost.price : null,
       };
 
       // Add the new post to the beginning of the posts array
@@ -527,6 +604,7 @@ export default function ShareProgressPage() {
         tags: [],
         is_premium: false,
         subscription_required: false,
+        premium_type: "free",
         progress_details: [],
       });
 
@@ -954,12 +1032,7 @@ export default function ShareProgressPage() {
         content: commentData.content,
         created_at: commentData.created_at,
         user: {
-          id: commentData.user.id,
-          full_name: commentData.user.full_name,
-          username: commentData.user.username,
-          avatar_url: commentData.user.avatar_url,
-          email: commentData.user.email,
-          display_option: commentData.user.display_option,
+          ...commentData.user,
           display_name: getDisplayName(commentData.user),
         },
       };
@@ -1117,6 +1190,154 @@ export default function ShareProgressPage() {
       setSubscribing(false);
     }
   };
+
+  // Add new function for handling Stripe payment
+  const handleStripePayment = async (post: ProgressPost) => {
+    if (!user) {
+      toast.error("Please log in to make a purchase");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Create a pending payment record
+      const { error: paymentError } = await supabase
+        .from("premium_payments")
+        .insert({
+          user_id: user.id,
+          post_id: post.id,
+          amount: post.one_time_price || 0,
+          payment_id: "pending",
+          status: "pending",
+        });
+
+      if (paymentError) {
+        console.error("Error creating payment record:", paymentError);
+        throw new Error("Failed to create payment record");
+      }
+
+      // Get Stripe instance
+      const stripe = await stripePromise;
+      if (!stripe) {
+        throw new Error("Stripe failed to initialize");
+      }
+
+      // Create Stripe Checkout Session
+      const response = await fetch("/api/create-checkout-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          amount: post.one_time_price,
+          postId: post.id,
+          userId: user.id,
+          userEmail: user.email,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Failed to create checkout session");
+      }
+
+      const { sessionId } = await response.json();
+
+      // Redirect to Stripe Checkout
+      const { error } = await stripe.redirectToCheckout({
+        sessionId,
+      });
+
+      if (error) {
+        throw error;
+      }
+    } catch (error) {
+      console.error("Payment error:", error);
+
+      // Clean up the pending payment record if the request fails
+      await supabase
+        .from("premium_payments")
+        .delete()
+        .match({ user_id: user.id, post_id: post.id, status: "pending" });
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Error processing payment. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Add effect to handle payment success/failure
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const success = searchParams.get("success");
+    const canceled = searchParams.get("canceled");
+    const postId = searchParams.get("postId");
+    const sessionId = searchParams.get("session_id");
+
+    const verifyPayment = async () => {
+      if (!sessionId || !postId || !user) return;
+
+      try {
+        // Verify payment status with your API endpoint
+        const response = await fetch("/api/verify-payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sessionId,
+            postId,
+            userId: user.id,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to verify payment");
+        }
+
+        const { status } = await response.json();
+
+        if (status === "succeeded") {
+          // Update local state
+          setPurchasedPosts((prev) => [...prev, postId]);
+          toast.success(
+            "Payment successful! You now have access to this content.",
+            {
+              duration: 5000,
+            }
+          );
+        } else {
+          toast.error("Payment verification failed. Please contact support.", {
+            duration: 5000,
+          });
+        }
+      } catch (error) {
+        console.error("Error verifying payment:", error);
+        toast.error("Error verifying payment. Please contact support.", {
+          duration: 5000,
+        });
+      }
+    };
+
+    if (success === "true" && sessionId) {
+      verifyPayment();
+    } else if (canceled === "true") {
+      toast.error("Payment canceled. You can try again when you're ready.", {
+        duration: 5000,
+      });
+    }
+
+    // Clean up URL parameters
+    if (success || canceled) {
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [user]);
 
   if (loading) {
     return (
@@ -1527,100 +1748,23 @@ export default function ShareProgressPage() {
                   <Label>Premium Options</Label>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Subscription Option */}
                   <div
                     className={cn(
                       "relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-300",
-                      newPost.is_premium
-                        ? "bg-blue-500 hover:bg-blue-600"
+                      newPost.premium_type === "subscription"
+                        ? "bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700"
                         : "bg-muted hover:bg-muted/80"
                     )}
                     onClick={() =>
                       setNewPost({
                         ...newPost,
-                        is_premium: !newPost.is_premium,
-                        subscription_required: false,
-                      })
-                    }
-                  >
-                    <div className="absolute inset-0 opacity-20 bg-grid-white/10" />
-                    <div className="relative p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="rounded-xl bg-white/20 p-2">
-                            <Crown className="h-5 w-5 text-white" />
-                          </div>
-                          <div>
-                            <h4
-                              className={cn(
-                                "font-medium",
-                                newPost.is_premium
-                                  ? "text-white"
-                                  : "text-foreground"
-                              )}
-                            >
-                              Premium Content
-                            </h4>
-                            <p
-                              className={cn(
-                                "text-sm",
-                                newPost.is_premium
-                                  ? "text-white/80"
-                                  : "text-muted-foreground"
-                              )}
-                            >
-                              Make this post exclusive
-                            </p>
-                          </div>
-                        </div>
-                        <span
-                          className={cn(
-                            "px-2 py-1 rounded-md text-sm font-semibold",
-                            newPost.is_premium
-                              ? "bg-blue-600 text-white"
-                              : "bg-muted-foreground/20 text-muted-foreground"
-                          )}
-                        >
-                          PRO
-                        </span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <div
-                          className={cn(
-                            "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
-                            newPost.is_premium
-                              ? "text-white"
-                              : "text-foreground"
-                          )}
-                        >
-                          <Star className="h-3.5 w-3.5" />
-                          <span className="text-xs">Enhanced visibility</span>
-                        </div>
-                        <div
-                          className={cn(
-                            "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
-                            newPost.is_premium
-                              ? "text-white"
-                              : "text-foreground"
-                          )}
-                        >
-                          <Award className="h-3.5 w-3.5" />
-                          <span className="text-xs">Special badge</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    className={cn(
-                      "relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-300",
-                      newPost.subscription_required
-                        ? "bg-violet-500 hover:bg-violet-600"
-                        : "bg-muted hover:bg-muted/80"
-                    )}
-                    onClick={() =>
-                      setNewPost({
-                        ...newPost,
-                        subscription_required: !newPost.subscription_required,
+                        premium_type:
+                          newPost.premium_type === "subscription"
+                            ? "free"
+                            : "subscription",
+                        subscription_required:
+                          newPost.premium_type !== "subscription",
                         is_premium: false,
                       })
                     }
@@ -1630,74 +1774,203 @@ export default function ShareProgressPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="rounded-xl bg-white/20 p-2">
-                            <Lock className="h-5 w-5 text-white" />
+                            <User className="h-5 w-5 text-white" />
                           </div>
                           <div>
                             <h4
                               className={cn(
                                 "font-medium",
-                                newPost.subscription_required
+                                newPost.premium_type === "subscription"
                                   ? "text-white"
                                   : "text-foreground"
                               )}
                             >
-                              Subscribers Only
+                              Subscription Required
                             </h4>
                             <p
                               className={cn(
                                 "text-sm",
-                                newPost.subscription_required
+                                newPost.premium_type === "subscription"
                                   ? "text-white/80"
                                   : "text-muted-foreground"
                               )}
                             >
-                              Restrict access to subscribers
+                              Viewers must subscribe to your content
                             </p>
                           </div>
                         </div>
-                        <span
+                        <div
                           className={cn(
-                            "px-2 py-1 rounded-md text-sm font-semibold",
-                            newPost.subscription_required
-                              ? "bg-violet-600 text-white"
+                            "px-3 py-1 rounded-full text-sm font-semibold",
+                            newPost.premium_type === "subscription"
+                              ? "bg-white/20 text-white"
                               : "bg-muted-foreground/20 text-muted-foreground"
                           )}
                         >
-                          SUB
-                        </span>
+                          Monthly
+                        </div>
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <div
                           className={cn(
                             "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
-                            newPost.subscription_required
+                            newPost.premium_type === "subscription"
                               ? "text-white"
                               : "text-foreground"
                           )}
                         >
                           <Star className="h-3.5 w-3.5" />
-                          <span className="text-xs">Exclusive access</span>
+                          <span className="text-xs">Recurring Revenue</span>
                         </div>
                         <div
                           className={cn(
                             "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
-                            newPost.subscription_required
+                            newPost.premium_type === "subscription"
                               ? "text-white"
                               : "text-foreground"
                           )}
                         >
                           <Award className="h-3.5 w-3.5" />
-                          <span className="text-xs">Premium badge</span>
+                          <span className="text-xs">Subscriber Benefits</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* One-Time Payment Option */}
+                  <div
+                    className={cn(
+                      "relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-300",
+                      newPost.premium_type === "one_time"
+                        ? "bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700"
+                        : "bg-muted hover:bg-muted/80"
+                    )}
+                    onClick={() =>
+                      setNewPost({
+                        ...newPost,
+                        premium_type:
+                          newPost.premium_type === "one_time"
+                            ? "free"
+                            : "one_time",
+                        is_premium: newPost.premium_type !== "one_time",
+                        subscription_required: false,
+                      })
+                    }
+                  >
+                    <div className="absolute inset-0 opacity-20 bg-grid-white/10" />
+                    <div className="relative p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="rounded-xl bg-white/20 p-2">
+                            <CreditCard className="h-5 w-5 text-white" />
+                          </div>
+                          <div>
+                            <h4
+                              className={cn(
+                                "font-medium",
+                                newPost.premium_type === "one_time"
+                                  ? "text-white"
+                                  : "text-foreground"
+                              )}
+                            >
+                              One-Time Purchase
+                            </h4>
+                            <p
+                              className={cn(
+                                "text-sm",
+                                newPost.premium_type === "one_time"
+                                  ? "text-white/80"
+                                  : "text-muted-foreground"
+                              )}
+                            >
+                              Set a fixed price for access
+                            </p>
+                          </div>
+                        </div>
+                        <div
+                          className={cn(
+                            "px-3 py-1 rounded-full text-sm font-semibold",
+                            newPost.premium_type === "one_time"
+                              ? "bg-white/20 text-white"
+                              : "bg-muted-foreground/20 text-muted-foreground"
+                          )}
+                        >
+                          One-Time
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div
+                          className={cn(
+                            "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
+                            newPost.premium_type === "one_time"
+                              ? "text-white"
+                              : "text-foreground"
+                          )}
+                        >
+                          <DollarSign className="h-3.5 w-3.5" />
+                          <span className="text-xs">Instant Access</span>
+                        </div>
+                        <div
+                          className={cn(
+                            "flex items-center gap-1 text-sm rounded-full px-2.5 py-1 bg-white/20",
+                            newPost.premium_type === "one_time"
+                              ? "text-white"
+                              : "text-foreground"
+                          )}
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                          <span className="text-xs">Lifetime Access</span>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
-                {(newPost.is_premium || newPost.subscription_required) && (
+
+                {/* Price Input for One-Time Purchase */}
+                {newPost.premium_type === "one_time" && (
+                  <div className="space-y-2">
+                    <Label>Price (USD)</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="0.99"
+                        step="0.01"
+                        placeholder="Enter price"
+                        value={newPost.price || ""}
+                        onChange={(e) =>
+                          setNewPost({
+                            ...newPost,
+                            price: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-32"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        Min. $0.99
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {newPost.premium_type && (
                   <div className="rounded-lg bg-muted p-4 text-sm">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      <Lock className="h-4 w-4" />
-                      <p>Premium content will only be visible to subscribers</p>
+                      {newPost.premium_type === "subscription" ? (
+                        <>
+                          <User className="h-4 w-4" />
+                          <p>
+                            Content will only be visible to your subscribers
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard className="h-4 w-4" />
+                          <p>
+                            Viewers will need to make a one-time payment to
+                            access this content
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1718,6 +1991,7 @@ export default function ShareProgressPage() {
                       tags: [],
                       is_premium: false,
                       subscription_required: false,
+                      premium_type: "free",
                       progress_details: [],
                     });
                   }}
@@ -1778,6 +2052,7 @@ export default function ShareProgressPage() {
                       tags: [],
                       is_premium: false,
                       subscription_required: false,
+                      premium_type: "free",
                       progress_details: [],
                     });
                   }}
@@ -1814,12 +2089,15 @@ export default function ShareProgressPage() {
                                 className="object-cover"
                               />
                               <AvatarFallback className="bg-gradient-to-br from-blue-500 to-violet-600 text-white font-semibold">
-                                {post.user.display_name
+                                {(
+                                  post.user.display_name ||
+                                  getDisplayName(post.user)
+                                )
                                   .substring(0, 2)
                                   .toUpperCase()}
                               </AvatarFallback>
                             </Avatar>
-                            {post.user.streak > 0 && (
+                            {post.user.streak && post.user.streak > 0 && (
                               <div className="absolute -bottom-1 -right-1 bg-yellow-500 rounded-full p-1.5 ring-2 ring-background">
                                 <Flame className="h-3 w-3 text-white" />
                               </div>
@@ -1851,42 +2129,53 @@ export default function ShareProgressPage() {
 
                         {/* Action Buttons */}
                         <div className="flex items-center gap-2">
-                          {post.subscription_required ? (
-                            <Button
-                              size="sm"
-                              className={cn(
-                                "bg-gradient-to-r shadow-md transition-all",
-                                subscriptionStatus[post.user.id] === "active"
-                                  ? "from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white"
-                                  : "from-violet-500 to-violet-600 hover:from-violet-600 hover:to-violet-700 text-white"
+                          {/* Only show subscription/payment buttons if user is not the post owner */}
+                          {post.user.id !== user?.id && (
+                            <>
+                              {/* Subscription Button */}
+                              {post.subscription_required && (
+                                <Button
+                                  size="sm"
+                                  className={cn(
+                                    "bg-gradient-to-r shadow-md transition-all",
+                                    subscriptionStatus[post.user.id] ===
+                                      "active"
+                                      ? "from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white"
+                                      : "from-violet-500 to-violet-600 hover:from-violet-600 hover:to-violet-700 text-white"
+                                  )}
+                                  onClick={() => handleSubscribe(post.user.id)}
+                                  disabled={subscribing}
+                                >
+                                  {subscribing ? (
+                                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                                  ) : subscriptionStatus[post.user.id] ===
+                                    "active" ? (
+                                    <>
+                                      <User className="h-4 w-4 mr-1" />
+                                      Subscribed
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Lock className="h-4 w-4 mr-1" />
+                                      Subscribe
+                                    </>
+                                  )}
+                                </Button>
                               )}
-                              onClick={() => handleSubscribe(post.user.id)}
-                              disabled={subscribing}
-                            >
-                              {subscribing ? (
-                                <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                              ) : subscriptionStatus[post.user.id] ===
-                                "active" ? (
-                                <>
-                                  <User className="h-4 w-4 mr-1" />
-                                  Subscribed
-                                </>
-                              ) : (
-                                <>
-                                  <Lock className="h-4 w-4 mr-1" />
-                                  Subscribe
-                                </>
+
+                              {/* Premium (One-time Payment) Button */}
+                              {post.premium_type === "one_time" && (
+                                <Button
+                                  size="sm"
+                                  className="bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white shadow-md"
+                                  onClick={() => handleStripePayment(post)}
+                                >
+                                  <Crown className="h-4 w-4 mr-1" />
+                                  Premium ${post.one_time_price?.toFixed(2)}
+                                </Button>
                               )}
-                            </Button>
-                          ) : post.is_premium ? (
-                            <Button
-                              size="sm"
-                              className="bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white shadow-md"
-                            >
-                              <Crown className="h-4 w-4 mr-1" />
-                              Premium
-                            </Button>
-                          ) : null}
+                            </>
+                          )}
 
                           {/* More Options Menu */}
                           <Select
@@ -2001,11 +2290,77 @@ export default function ShareProgressPage() {
                       </div>
                     </div>
 
-                    {/* Content Section - Controlled height */}
-                    <div className="flex-1 p-4 space-y-4 overflow-hidden">
+                    {/* Content Section - Update premium content overlay */}
+                    <div className="flex-1 p-4 space-y-4 overflow-hidden relative">
+                      {(post.subscription_required ||
+                        post.premium_type === "one_time") &&
+                        subscriptionStatus[post.user.id] !== "active" &&
+                        !purchasedPosts.includes(post.id) &&
+                        post.user.id !== user?.id && (
+                          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-10">
+                            <div className="text-center p-6">
+                              <div className="bg-primary/10 rounded-full p-3 w-fit mx-auto mb-4">
+                                {post.subscription_required ? (
+                                  <Lock className="h-6 w-6 text-primary" />
+                                ) : (
+                                  <Crown className="h-6 w-6 text-primary" />
+                                )}
+                              </div>
+                              <h3 className="text-lg font-semibold mb-2">
+                                {post.subscription_required
+                                  ? "Subscriber Only Content"
+                                  : "Premium Content"}
+                              </h3>
+                              <p className="text-sm text-muted-foreground mb-4">
+                                {post.subscription_required
+                                  ? "Subscribe to access exclusive content"
+                                  : `Get access to this premium content for $${post.one_time_price?.toFixed(
+                                      2
+                                    )}`}
+                              </p>
+                              <Button
+                                onClick={() =>
+                                  post.subscription_required
+                                    ? handleSubscribe(post.user.id)
+                                    : handleStripePayment(post)
+                                }
+                                className={cn(
+                                  "bg-gradient-to-r shadow-md",
+                                  post.subscription_required
+                                    ? "from-violet-500 to-violet-600 hover:from-violet-600 hover:to-violet-700"
+                                    : "from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700"
+                                )}
+                              >
+                                {post.subscription_required ? (
+                                  <>
+                                    <User className="h-4 w-4 mr-2" />
+                                    Subscribe Now
+                                  </>
+                                ) : (
+                                  <>
+                                    <Crown className="h-4 w-4 mr-2" />
+                                    Buy Now
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
                       <div>
                         <h3 className="text-lg font-semibold mb-2 line-clamp-1">
                           {post.title}
+                          {(post.subscription_required ||
+                            post.premium_type === "one_time") && (
+                            <span className="ml-2 inline-flex items-center gap-1">
+                              {post.subscription_required && (
+                                <Lock className="h-4 w-4 text-violet-500" />
+                              )}
+                              {post.premium_type === "one_time" && (
+                                <Crown className="h-4 w-4 text-yellow-500" />
+                              )}
+                            </span>
+                          )}
                         </h3>
                         <div className="relative">
                           <div
@@ -2252,7 +2607,10 @@ export default function ShareProgressPage() {
                                             src={comment.user.avatar_url || ""}
                                           />
                                           <AvatarFallback>
-                                            {comment.user.display_name
+                                            {(
+                                              comment.user.display_name ||
+                                              getDisplayName(comment.user)
+                                            )
                                               .substring(0, 2)
                                               .toUpperCase()}
                                           </AvatarFallback>
